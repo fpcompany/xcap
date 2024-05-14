@@ -42,6 +42,10 @@ pub fn capture_window(impl_window: &ImplWindow) -> XCapResult<RgbaImage> {
     xorg_capture(impl_window.window, 0, 0, width, height)
 }
 
+pub fn capture_window_area(impl_window: &ImplWindow, x: i32, y: i32, w: u32, h:u32) -> XCapResult<RgbaImage> {
+    xorg_capture(impl_window.window, x, y, w, h)
+}
+
 // fn capture_screen_area(
 //     screen_info: &ScreenInfo,
 //     x: i32,

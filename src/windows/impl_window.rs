@@ -26,6 +26,7 @@ use crate::{
     error::XCapResult,
     platform::{boxed::BoxProcessHandle, utils::log_last_error},
 };
+use crate::platform::capture::capture_window_area;
 
 use super::{
     capture::capture_window,
@@ -60,7 +61,7 @@ fn is_window_cloaked(hwnd: HWND) -> bool {
             &mut cloaked as *mut u32 as *mut c_void,
             mem::size_of::<u32>() as u32,
         )
-        .is_err();
+            .is_err();
 
         if is_dwm_get_window_attribute_fail {
             return false;
@@ -236,7 +237,7 @@ fn get_app_name(hwnd: HWND) -> XCapResult<String> {
             &mut lang_code_pages_ptr,
             &mut lang_code_pages_length,
         )
-        .ok()?;
+            .ok()?;
 
         let lang_code_pages: &[LangCodePage] =
             slice::from_raw_parts(lang_code_pages_ptr.cast(), lang_code_pages_length as usize);
@@ -267,7 +268,7 @@ fn get_app_name(hwnd: HWND) -> XCapResult<String> {
                     &mut value_ptr,
                     &mut value_length,
                 )
-                .as_bool();
+                    .as_bool();
 
                 if !is_success {
                     continue;
@@ -348,5 +349,9 @@ impl ImplWindow {
     pub fn capture_image(&self) -> XCapResult<RgbaImage> {
         // TODO: 在win10之后，不同窗口有不同的dpi，所以可能存在截图不全或者截图有较大空白，实际窗口没有填充满图片
         capture_window(self.hwnd, self.current_monitor.scale_factor)
+    }
+
+    pub fn capture_image_area(&self, x:i32, y:i32, w:u32, h:u32) -> XCapResult<RgbaImage> {
+        capture_window_area(self.hwnd, self.current_monitor.scale_factor, x, y, w, h)
     }
 }

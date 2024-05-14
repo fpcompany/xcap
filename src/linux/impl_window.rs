@@ -10,6 +10,7 @@ use xcb::{
 };
 
 use crate::error::{XCapError, XCapResult};
+use crate::platform::capture::capture_window_area;
 
 use super::{capture::capture_window, impl_monitor::ImplMonitor, utils::Rect};
 
@@ -237,5 +238,8 @@ impl ImplWindow {
 impl ImplWindow {
     pub fn capture_image(&self) -> XCapResult<RgbaImage> {
         capture_window(self)
+    }
+    pub fn capture_image_area(&self, x:i32, y:i32, w:u32, h:u32) -> XCapResult<RgbaImage> {
+        capture_window_area(self, x, y, w, h)
     }
 }
