@@ -1,5 +1,5 @@
 use dbus::{
-    arg::{AppendAll, Iter, IterAppend, PropMap, ReadAll, RefArg, TypeMismatchError, Variant},
+    arg::{AppendAll, Iter, IterAppend, ReadAll, RefArg, TypeMismatchError, Variant},
     blocking::Connection,
     message::{MatchRule, SignalArgs},
 };
@@ -16,6 +16,8 @@ use std::{
 use crate::error::{XCapError, XCapResult};
 
 use super::{impl_monitor::ImplMonitor, utils::png_to_rgba_image};
+
+pub type PropMap = HashMap<String, Variant<Box<dyn RefArg + 'static>>>;
 
 #[derive(Debug)]
 struct OrgFreedesktopPortalRequestResponse {
