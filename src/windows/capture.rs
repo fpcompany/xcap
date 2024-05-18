@@ -1,17 +1,15 @@
 use image::RgbaImage;
 use std::{ffi::c_void, mem};
 use windows::Win32::{
-    Foundation::HWND,
+    Foundation::{HWND, RECT},
     Graphics::{
         Dwm::DwmIsCompositionEnabled,
         Gdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, GetCurrentObject, GetDIBits,
-            GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-            OBJ_BITMAP, SRCCOPY,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, GetCurrentObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, OBJ_BITMAP, SRCCOPY
         },
     },
     Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS},
-    UI::WindowsAndMessaging::GetDesktopWindow,
+    UI::WindowsAndMessaging::{GetClientRect, GetDesktopWindow},
 };
 
 use crate::{
@@ -182,11 +180,14 @@ pub fn capture_window(hwnd: HWND, scale_factor: f32) -> XCapResult<RgbaImage> {
         to_rgba_image(box_hdc_mem, box_h_bitmap, width, height)
     }
 }
-
+/*
 #[allow(unused)]
 pub fn capture_window_area(hwnd: HWND, scale_factor: f32, x: i32, y: i32, w: u32, h: u32) -> XCapResult<RgbaImage> {
     unsafe {
-        let box_hdc_window: BoxHDC = BoxHDC::from(hwnd);
+        let dw_hwnd = GetDesktopWindow();
+        let box_hdc_window: BoxHDC = BoxHDC::from(dw_hwnd);
+
+        //let box_hdc_window: BoxHDC = BoxHDC::from(hwnd);
         let mut width: i32 = (w as f32 * scale_factor) as i32;
         let mut height: i32 = (h as f32 * scale_factor) as i32;
 
@@ -221,6 +222,60 @@ pub fn capture_window_area(hwnd: HWND, scale_factor: f32, x: i32, y: i32, w: u32
 
         SelectObject(*box_hdc_mem, previous_object);
 
+        to_rgba_image(box_hdc_mem, box_h_bitmap, width, height)
+    }
+}*/
+
+#[allow(unused)]
+pub fn capture_window_area(hwnd: HWND, scale_factor: f32, x: i32, y: i32, w: u32, h: u32) -> XCapResult<RgbaImage> {
+    unsafe {
+        // Get the handle of the desktop window
+        let dw_hwnd = GetDesktopWindow();
+        let box_hdc_desktop: BoxHDC = BoxHDC::from(dw_hwnd);
+
+        // Get the client area rectangle of the target window
+        let mut rect: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut rect);
+
+        // Calculate the size of the client area with scaling
+        //let width = (rect.right as f32 * scale_factor) as i32;
+        //let height = (rect.bottom as f32 * scale_factor) as i32;
+        let mut width: i32 = (w as f32 * scale_factor) as i32;
+        let mut height: i32 = (h as f32 * scale_factor) as i32;
+
+        // Create memory DC and compatible bitmap for capturing
+        let box_hdc_mem = BoxHDC::new(CreateCompatibleDC(*box_hdc_desktop), None);
+        let box_h_bitmap = BoxHBITMAP::new(CreateCompatibleBitmap(*box_hdc_desktop, width, height));
+        let previous_object = SelectObject(*box_hdc_mem, *box_h_bitmap);
+
+        // Capture the client area using BitBlt
+        let is_success = BitBlt(
+            *box_hdc_mem,
+            0,
+            0,
+            width,
+            height,
+            *box_hdc_desktop,
+            rect.left+x,
+            rect.top+y,
+            SRCCOPY,
+        ).is_ok();
+
+        // If BitBlt fails, fallback to PrintWindow
+        if !is_success {
+            println!("FALLBACK TO PRINTWINDOW");
+            let is_success = if get_os_major_version() >= 8 {
+                PrintWindow(hwnd, *box_hdc_mem, PRINT_WINDOW_FLAGS(2)).as_bool()
+            } else if DwmIsCompositionEnabled()?.as_bool() {
+                PrintWindow(hwnd, *box_hdc_mem, PRINT_WINDOW_FLAGS(0)).as_bool()
+            } else {
+                PrintWindow(hwnd, *box_hdc_mem, PRINT_WINDOW_FLAGS(3)).as_bool()
+            };
+        }
+
+        SelectObject(*box_hdc_mem, previous_object);
+
+        // Convert captured image to RgbaImage
         to_rgba_image(box_hdc_mem, box_h_bitmap, width, height)
     }
 }
