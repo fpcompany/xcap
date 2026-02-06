@@ -1,10 +1,20 @@
 use image::RgbaImage;
+use std::cell::RefCell;
+use std::thread_local;
 use xcb::{
     x::{Drawable, GetImage, ImageFormat, ImageOrder, Window},
     Connection,
 };
 
 use crate::error::{XCapError, XCapResult};
+
+// Reuse a per-thread XCB connection to avoid reconnect overhead on each capture.
+thread_local! {
+    static XCB_CONN: RefCell<Connection> = {
+        let (conn, _) = Connection::connect(None).expect("Failed to connect to X server");
+        RefCell::new(conn)
+    };
+}
 
 fn get_pixel8_rgba(
     bytes: &[u8],
@@ -76,54 +86,90 @@ pub fn xorg_capture(
     width: u32,
     height: u32,
 ) -> XCapResult<RgbaImage> {
-    let (conn, _) = Connection::connect(None)?;
+    XCB_CONN.with(|conn_cell| {
+        let conn = conn_cell.borrow();
 
-    let setup = conn.get_setup();
+        let setup = conn.get_setup();
 
-    let get_image_cookie = conn.send_request(&GetImage {
-        format: ImageFormat::ZPixmap,
-        drawable: Drawable::Window(window),
-        x: x as i16,
-        y: y as i16,
-        width: width as u16,
-        height: height as u16,
-        plane_mask: u32::MAX,
-    });
+        let get_image_cookie = conn.send_request(&GetImage {
+            format: ImageFormat::ZPixmap,
+            drawable: Drawable::Window(window),
+            x: x as i16,
+            y: y as i16,
+            width: width as u16,
+            height: height as u16,
+            plane_mask: u32::MAX,
+        });
 
-    let get_image_reply = conn.wait_for_reply(get_image_cookie)?;
-    let bytes = get_image_reply.data();
-    let depth = get_image_reply.depth();
+        let get_image_reply = conn
+            .wait_for_reply(get_image_cookie)
+            .map_err(|e| XCapError::new(format!("xcb wait_for_reply error: {}", e)))?;
+        let bytes = get_image_reply.data();
+        let depth = get_image_reply.depth();
 
-    let pixmap_format = setup
-        .pixmap_formats()
-        .iter()
-        .find(|item| item.depth() == depth)
-        .ok_or(XCapError::new("Not found pixmap format"))?;
+        let pixmap_format = setup
+            .pixmap_formats()
+            .iter()
+            .find(|item| item.depth() == depth)
+            .ok_or(XCapError::new("Not found pixmap format"))?;
 
-    let bits_per_pixel = pixmap_format.bits_per_pixel() as u32;
-    let bit_order = setup.bitmap_format_bit_order();
+        let bits_per_pixel = pixmap_format.bits_per_pixel() as u32;
+        let bit_order = setup.bitmap_format_bit_order();
 
-    let get_pixel_rgba = match depth {
-        8 => get_pixel8_rgba,
-        16 => get_pixel16_rgba,
-        24 => get_pixel24_32_rgba,
-        32 => get_pixel24_32_rgba,
-        _ => return Err(XCapError::new(format!("Unsupported {} depth", depth))),
-    };
-
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
-    for y in 0..height {
-        for x in 0..width {
-            let index = ((y * width + x) * 4) as usize;
-            let (r, g, b, a) = get_pixel_rgba(bytes, x, y, width, bits_per_pixel, bit_order);
-
-            rgba[index] = r;
-            rgba[index + 1] = g;
-            rgba[index + 2] = b;
-            rgba[index + 3] = a;
+        // Fast-path common depths to reduce per-pixel overhead
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        match depth {
+            24 | 32 => {
+                // Convert BGR(A) -> RGBA
+                let stride = (bits_per_pixel / 8) as usize;
+                for row in 0..height as usize {
+                    for col in 0..width as usize {
+                        let src_index = (row * width as usize + col) * stride;
+                        let dst_index = (row * width as usize + col) * 4;
+                        if bit_order == ImageOrder::LsbFirst {
+                            // bytes: B, G, R, (A?)
+                            rgba[dst_index] = bytes[src_index + 2];
+                            rgba[dst_index + 1] = bytes[src_index + 1];
+                            rgba[dst_index + 2] = bytes[src_index];
+                            rgba[dst_index + 3] = 255;
+                        } else {
+                            // bytes: R, G, B, (A?)
+                            rgba[dst_index] = bytes[src_index];
+                            rgba[dst_index + 1] = bytes[src_index + 1];
+                            rgba[dst_index + 2] = bytes[src_index + 2];
+                            rgba[dst_index + 3] = 255;
+                        }
+                    }
+                }
+            }
+            16 => {
+                for yy in 0..height {
+                    for xx in 0..width {
+                        let index = ((yy * width + xx) * 4) as usize;
+                        let (r, g, b, a) = get_pixel16_rgba(bytes, xx, yy, width, bits_per_pixel, bit_order);
+                        rgba[index] = r;
+                        rgba[index + 1] = g;
+                        rgba[index + 2] = b;
+                        rgba[index + 3] = a;
+                    }
+                }
+            }
+            8 => {
+                for yy in 0..height {
+                    for xx in 0..width {
+                        let index = ((yy * width + xx) * 4) as usize;
+                        let (r, g, b, a) = get_pixel8_rgba(bytes, xx, yy, width, bits_per_pixel, bit_order);
+                        rgba[index] = r;
+                        rgba[index + 1] = g;
+                        rgba[index + 2] = b;
+                        rgba[index + 3] = a;
+                    }
+                }
+            }
+            _ => return Err(XCapError::new(format!("Unsupported {} depth", depth))),
         }
-    }
 
-    RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| XCapError::new("RgbaImage::from_raw failed"))
+        RgbaImage::from_raw(width, height, rgba)
+            .ok_or_else(|| XCapError::new("RgbaImage::from_raw failed"))
+    })
 }

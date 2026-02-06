@@ -229,26 +229,27 @@ pub fn capture_window_area(hwnd: HWND, scale_factor: f32, x: i32, y: i32, w: u32
 #[allow(unused)]
 pub fn capture_window_area(hwnd: HWND, scale_factor: f32, x: i32, y: i32, w: u32, h: u32) -> XCapResult<RgbaImage> {
     unsafe {
-        // Get the handle of the desktop window
-        let dw_hwnd = GetDesktopWindow();
-        let box_hdc_desktop: BoxHDC = BoxHDC::from(dw_hwnd);
+        // Desktop DC as source (fast path for repeated captures)
+        let desktop_hwnd = GetDesktopWindow();
+        let box_hdc_desktop: BoxHDC = BoxHDC::from(desktop_hwnd);
 
-        // Get the client area rectangle of the target window
-        let mut rect: RECT = std::mem::zeroed();
-        GetClientRect(hwnd, &mut rect);
+        // Scale dimensions and offsets (DPI aware)
+        let width: i32 = (w as f32 * scale_factor) as i32;
+        let height: i32 = (h as f32 * scale_factor) as i32;
+        let off_x: i32 = (x as f32 * scale_factor) as i32;
+        let off_y: i32 = (y as f32 * scale_factor) as i32;
 
-        // Calculate the size of the client area with scaling
-        //let width = (rect.right as f32 * scale_factor) as i32;
-        //let height = (rect.bottom as f32 * scale_factor) as i32;
-        let mut width: i32 = (w as f32 * scale_factor) as i32;
-        let mut height: i32 = (h as f32 * scale_factor) as i32;
+        // Compute source origin in screen coordinates
+        let rect: RECT = crate::platform::utils::get_window_rect(hwnd)?;
+        let src_x = rect.left + off_x;
+        let src_y = rect.top + off_y;
 
         // Create memory DC and compatible bitmap for capturing
         let box_hdc_mem = BoxHDC::new(CreateCompatibleDC(*box_hdc_desktop), None);
         let box_h_bitmap = BoxHBITMAP::new(CreateCompatibleBitmap(*box_hdc_desktop, width, height));
         let previous_object = SelectObject(*box_hdc_mem, *box_h_bitmap);
 
-        // Capture the client area using BitBlt
+        // Copy requested area directly
         let is_success = BitBlt(
             *box_hdc_mem,
             0,
@@ -256,15 +257,14 @@ pub fn capture_window_area(hwnd: HWND, scale_factor: f32, x: i32, y: i32, w: u32
             width,
             height,
             *box_hdc_desktop,
-            rect.left+x,
-            rect.top+y,
+            src_x,
+            src_y,
             SRCCOPY,
         ).is_ok();
 
-        // If BitBlt fails, fallback to PrintWindow
+        // Conservative fallback (rarely used) in case BitBlt fails
         if !is_success {
-            println!("FALLBACK TO PRINTWINDOW");
-            let is_success = if get_os_major_version() >= 8 {
+            let _ = if get_os_major_version() >= 8 {
                 PrintWindow(hwnd, *box_hdc_mem, PRINT_WINDOW_FLAGS(2)).as_bool()
             } else if DwmIsCompositionEnabled()?.as_bool() {
                 PrintWindow(hwnd, *box_hdc_mem, PRINT_WINDOW_FLAGS(0)).as_bool()
