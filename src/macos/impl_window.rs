@@ -1,6 +1,6 @@
 use core_foundation::{
     array::{CFArrayGetCount, CFArrayGetValueAtIndex},
-    base::{FromVoid, TCFType},
+    base::{CFRelease, FromVoid, TCFType},
     dictionary::{CFDictionaryGetValue, CFDictionaryRef},
     number::{kCFNumberIntType, CFBooleanGetValue, CFBooleanRef, CFNumberGetValue, CFNumberRef},
     string::CFString,
@@ -10,7 +10,7 @@ use core_graphics::{
         kCGWindowListExcludeDesktopElements, kCGWindowListOptionIncludingWindow,
         kCGWindowListOptionOnScreenOnly, CGDisplay, CGPoint, CGWindowListCopyWindowInfo,
     },
-    geometry::CGRect,
+    geometry::{CGRect, CGSize},
     window::{kCGNullWindowID, kCGWindowSharingNone},
 };
 use image::RgbaImage;
@@ -256,5 +256,44 @@ impl ImplWindow {
             kCGWindowListOptionIncludingWindow,
             self.id,
         )
+    }
+
+    /// `x`, `y`, `w`, `h` are physical pixels from the window's top-left, as
+    /// on Windows and Linux. Quartz takes a rectangle in points of global
+    /// display space, so they are divided by the display's scale; the image
+    /// comes back at the backing resolution, i.e. `w` x `h` pixels.
+    ///
+    /// The window's bounds are looked up again by id rather than taken from
+    /// the listing, so a moved window is followed and a closed one is an error
+    /// the caller can react to by listing windows again. Note the bounds are
+    /// the frame: a titled window's title bar is inside them.
+    pub fn capture_image_area(&self, x: i32, y: i32, w: u32, h: u32) -> XCapResult<RgbaImage> {
+        let bounds = current_window_cg_rect(self.id)?;
+        let scale = f64::from(self.current_monitor.scale_factor.max(1.0));
+        let rect = CGRect::new(
+            &CGPoint::new(
+                bounds.origin.x + f64::from(x) / scale,
+                bounds.origin.y + f64::from(y) / scale,
+            ),
+            &CGSize::new(f64::from(w) / scale, f64::from(h) / scale),
+        );
+        capture(rect, kCGWindowListOptionIncludingWindow, self.id)
+    }
+}
+
+/// The window's bounds as the window server has them now.
+fn current_window_cg_rect(window_id: u32) -> XCapResult<CGRect> {
+    unsafe {
+        let list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, window_id);
+        if list.is_null() {
+            return Err(XCapError::new(format!("Window {} not found", window_id)));
+        }
+        let result = if CFArrayGetCount(list) > 0 {
+            get_window_cg_rect(CFArrayGetValueAtIndex(list, 0) as CFDictionaryRef)
+        } else {
+            Err(XCapError::new(format!("Window {} not found", window_id)))
+        };
+        CFRelease(list as *const c_void);
+        result
     }
 }
